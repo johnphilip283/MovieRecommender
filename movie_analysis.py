@@ -2,10 +2,24 @@ import pandas as pd
 import csv
 import os
 import datetime
+import requests
 from time import sleep
-from omdb_scraping import ping_api
 
+API_URL = "http://www.omdbapi.com"
 API_KEY = "d8a2854c"
+
+
+def ping_api(movie_name, year=None, api_key=API_KEY):
+
+    request_params = {'apikey': api_key, 'type': 'movie', 't': movie_name, 'plot': 'full'}
+
+    if year:
+        request_params['y'] = year
+
+    r = requests.get(API_URL, params=request_params)
+
+    return r.json()
+
 
 # Concatenate the dataframes into one big dataset.
 df = pd.concat([pd.read_csv("wiki_dataset_1.csv", index_col=0),
@@ -18,27 +32,17 @@ imputation_targets = ("Unknown", "N/A", "unknown", "")
 
 # Imputes missing data from the wikipedia plot summary dataset with OMDB-scraped data, and supplements it with
 # extra data.
-with open("intermediate.csv") as read_file, open("final.csv", 'a') as write_file, open("index.txt", "r+") as index_file:
-
-    try:
-        last_index = index_file.readline().strip()
-        last_index = int(last_index)
-    except ValueError as e:
-        raise e
+with open("intermediate.csv") as read_file, open("final.csv", 'a') as write_file:
 
     reader = csv.DictReader(read_file)
 
-    supplementary_data = ["Runtime", "imdbRating", "imdbVotes", "Rated", "Internet Movie Database", "Rotten Tomatoes",
-                          "Metacritic"]
+    supplementary_data = ["Runtime", "imdbRating", "imdbVotes", "Rated", "Rotten Tomatoes", "Metacritic"]
 
     writer = csv.DictWriter(write_file, fieldnames=df.columns.tolist() + supplementary_data)
     writer.writeheader()
     movie_json = {}
 
-    for index, row in enumerate(reader):
-
-        if index < last_index:
-            continue
+    for row in reader:
 
         row = dict(row)
 
@@ -48,27 +52,19 @@ with open("intermediate.csv") as read_file, open("final.csv", 'a') as write_file
                                   year=row["Release Year"] if row["Release Year"] not in imputation_targets else None,
                                   api_key=API_KEY)
 
-            # If we hit the database too fast, then we time out, so we'll add a second of delay between each call.
-            # sleep(0.5)
-
             # If the movie doesn't exist in the OMDB database, then skip this row, since we can't add any extra data
             # to it.
             if movie_json["Response"] == "False":
 
-                # If we do end up still timing out, then sleep for a minute
+                # Repeat the queries
                 if movie_json["Error"] == "Request limit reached!":
                     print("Timed out: JSON response is: {}".format(movie_json))
 
-                    with open("index.txt", "w") as f:
-                        f.write(str(index))
-
+                    sleep(3600 * 24)
                     break
 
                 elif movie_json["Error"] == "Movie not found!":
                     print("Not found: JSON response is: {}".format(movie_json))
-
-                    with open("index.txt", "w") as f:
-                        f.write(str(index))
 
                 print("Empty API response for {}. ".format(row["Title"]))
 
@@ -107,24 +103,12 @@ with open("intermediate.csv") as read_file, open("final.csv", 'a') as write_file
         except KeyError as e:
 
             print("Movie JSON: {}".format(movie_json))
-            print("Row: {}".format(row))
-            print()
+            print("Row: {}".format(row) + "\n")
             print("{}:\t\tRan into a key error for row {}.".format(str(datetime.datetime.now()), row["Title"]))
 
-        except KeyboardInterrupt:
-
-            with open("index.txt", "w") as f:
-                f.write(str(index))
+        except (KeyboardInterrupt, Exception):
 
             print("Writing files ...")
-            break
-
-        except Exception:
-
-            with open("index.txt", "w") as f:
-                f.write(str(index))
-
-            print("Ran into an unexpected error. Writing files...")
             break
 
 df = pd.read_csv("final.csv", index_col=0)
